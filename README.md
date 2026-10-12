@@ -1,4 +1,4 @@
-# 任务栏歌词 · 微光（增强版）
+# 任务栏歌词 · 微光（修改版）
 
 基于 [CarsonGame/EchoMusic-TaskbarLyrics](https://github.com/CarsonGame/EchoMusic-TaskbarLyrics) 继续开发，由 fengjianhua7 维护。保留原项目的 MIT 许可证及版权声明。
 
