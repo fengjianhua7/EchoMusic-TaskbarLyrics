@@ -5,7 +5,7 @@ on:
   push:
     branches: [main]
     paths:
-      - taskbar-lyrics/manifest.json
+      - taskbar-lyrics/**
       - .github/workflows/release.yml
 
 permissions:
@@ -80,3 +80,4 @@ jobs:
             });
             await github.rest.repos.updateRelease({...repository, release_id: release.id, draft: false});
             core.info(`Published ${release.html_url}`);
+
