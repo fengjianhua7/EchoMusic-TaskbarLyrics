@@ -46,6 +46,9 @@ sealed class TaskbarLyrics
     static double queuedVolumeDelta;
     static bool volumeSending;
     static TaskbarLyrics pointerOwner;
+    static TaskbarLyrics gestureOwner;
+    static int gestureDown;
+    bool gestureChecks=true;
     double volume;
     int wheelRemainder;
     Border volumeSurface;
@@ -379,6 +382,7 @@ sealed class TaskbarLyrics
     {
         closed=true;CancelScrub();CloseTrackNotice();pointerTimer.Stop();instances.Remove(this);
         if(pointerOwner==this){pointerOwner=null;ReleaseCapture();}
+        if(gestureOwner==this){gestureOwner=null;gestureDown=0;}
         if(instances.Count==0){UnhookWindowsHookEx(wheelHook);wheelHook=IntPtr.Zero;queuedVolumeDelta=0;}
         CompositionTarget.Rendering-=RenderScroll;
         UnhookWinEvent(foregroundHook);UnhookWinEvent(reorderHook);ReleaseSurface();surfaceSource.Dispose();if(IsWindow(handle))DestroyWindow(handle);window.Close();
@@ -410,7 +414,7 @@ sealed class TaskbarLyrics
                             maskVisible=masking, primaryMaskWidth=primaryMaskWidth,secondaryMaskWidth=secondaryMaskWidth,
                             singleText=true,primaryColorBoundary=primaryProgress.GradientStops[1].Offset,secondaryColorBoundary=secondaryProgress.GradientStops[1].Offset,
                             shellRaises=shellRaises,positionUpdates=positionUpdates,styleUpdates=styleUpdates, aboveTaskbar=AboveTaskbar(), shellCoversLyrics=ShellCoversLyrics(),
-                            embedded=display.Taskbar!=IntPtr.Zero && IsChild(display.Taskbar,handle),paintSucceeded=paintSucceeded,paintError=lastPaintError,childStyle=(GetWindowLong(handle,-16)&0x40000000)!=0,parent=GetParent(handle).ToInt64(),wheelHookActive=wheelHook!=IntPtr.Zero,volume=volume,volumeVisible=volumeSurface.Visibility==Visibility.Visible,
+                            embedded=display.Taskbar!=IntPtr.Zero && IsChild(display.Taskbar,handle),gestureChecks=gestureChecks,paintSucceeded=paintSucceeded,paintError=lastPaintError,childStyle=(GetWindowLong(handle,-16)&0x40000000)!=0,parent=GetParent(handle).ToInt64(),wheelHookActive=wheelHook!=IntPtr.Zero,volume=volume,volumeVisible=volumeSurface.Visibility==Visibility.Visible,
                             owned=ownerBar!=IntPtr.Zero && GetWindow(handle,4)==ownerBar,owner=GetWindow(handle,4).ToInt64(),taskbar=display.Taskbar.ToInt64(),windowBand=selfBand,taskbarBand=barBand,
                             hoverEnabled=hoverEnabled,controlsVisible=hovering,controlsEnabled=playButton.IsEnabled,isFavorite=favorite,playing=clockPlaying,
                             coverVisible=coverEnabled,coverLoaded=coverImage.Source!=null,coverShape=coverVisual.Clip is EllipseGeometry?"circle":"rectangle",coverAngle=coverRotation.Angle,
@@ -467,6 +471,7 @@ sealed class TaskbarLyrics
             var clock=Stopwatch.StartNew();var reorderClock=new Stopwatch();bool polling=false,reordered=false;int failures=0;
             bool inputVerification=args.Length==3 && args[2]=="--verify-input",wheelVerified=false;
             bool buttonVerification=args.Length==3 && args[2]=="--verify-buttons";
+            bool gestureVerification=args.Length==3 && args[2]=="--verify-gestures";int gestureStage=0;
             NativePoint originalCursor=new NativePoint();if(buttonVerification)GetCursorPos(out originalCursor);
             int buttonStage=0;
             string inventory="";var screens=new List<Display>();DateTime checkedAt=DateTime.MinValue;
@@ -499,6 +504,22 @@ sealed class TaskbarLyrics
                         surface.Apply(frame);
                     }
                     failures=0;
+                    if(gestureVerification && clock.ElapsedMilliseconds>=250+gestureStage*400 && gestureStage<5) {
+                        var surface=surfaces[targets[0].Info.Device];Rect bounds;GetWindowRect(surface.handle,out bounds);
+                        var point=new NativePoint {X=bounds.Left+bounds.Width-8,Y=bounds.Top+bounds.Height/2};
+                        var outside=new NativePoint {X=bounds.Right+8,Y=point.Y};
+                        if(gestureStage==0 || gestureStage==1){int down=gestureStage==0?0x204:0x207;surface.gestureChecks&=HandleGesture(down,point);surface.gestureChecks&=HandleGesture(down+1,point);}
+                        if(gestureStage==2) {
+                            surface.hoverEnabled=true;surface.SetHover(true);surface.hoverAmount=1;surface.SetProgressHover(false);surface.RenderScroll(null,EventArgs.Empty);
+                            Point center=surface.ScreenPoint(surface.nextButton,new Point(surface.nextButton.ActualWidth/2,surface.nextButton.ActualHeight/2));
+                            var buttonPoint=new NativePoint {X=(int)center.X,Y=(int)center.Y};
+                            surface.gestureChecks&=!HandleGesture(0x204,buttonPoint) && !HandleGesture(0x205,buttonPoint);
+                            surface.gestureChecks&=HandleGesture(0x207,buttonPoint) && HandleGesture(0x208,buttonPoint);
+                        }
+                        if(gestureStage==3)surface.gestureChecks&=!HandleGesture(0x204,outside) && !HandleGesture(0x205,outside);
+                        if(gestureStage==4)surface.gestureChecks&=HandleGesture(0x204,point) && HandleGesture(0x205,outside);
+                        gestureStage++;
+                    }
                     if(buttonVerification && clock.ElapsedMilliseconds>250+buttonStage*300 && buttonStage<9) {
                         var surface=surfaces[targets[0].Info.Device];
                         var buttons=new[]{surface.previousButton,surface.playButton,surface.nextButton,surface.favoriteButton};
@@ -525,8 +546,8 @@ sealed class TaskbarLyrics
                         try {Marshal.StructureToPtr(mouse,data,false);OnWheel(0,new IntPtr(0x20A),data);}finally {Marshal.FreeHGlobal(data);}
                         wheelVerified=true;
                     }
-                    if(args.Length==3 && !inputVerification && !buttonVerification && !reordered && clock.ElapsedMilliseconds>=200){Process.Start(new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName,"--raise-taskbar"){UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden});reordered=true;reorderClock.Restart();}
-                    if(args.Length==2 || (buttonVerification && clock.ElapsedMilliseconds>=3300) || (inputVerification && clock.ElapsedMilliseconds>=700) || (args.Length==3 && reordered && reorderClock.ElapsedMilliseconds>=400)) {
+                    if(args.Length==3 && !inputVerification && !buttonVerification && !gestureVerification && !reordered && clock.ElapsedMilliseconds>=200){Process.Start(new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName,"--raise-taskbar"){UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden});reordered=true;reorderClock.Restart();}
+                    if(args.Length==2 || (gestureVerification && clock.ElapsedMilliseconds>=2600) || (buttonVerification && clock.ElapsedMilliseconds>=3300) || (inputVerification && clock.ElapsedMilliseconds>=700) || (args.Length==3 && reordered && reorderClock.ElapsedMilliseconds>=400)) {
                         var reports=new Dictionary<string,object>();foreach(var item in surfaces)reports.Add(item.Key,item.Value.Report());
                         // 保留旧验证报告字段，并附上各屏幕窗口以验证选择结果。
                         var first=json.Deserialize<Dictionary<string,object>>(json.Serialize(surfaces[targets[0].Info.Device].Report()));
@@ -839,6 +860,18 @@ sealed class TaskbarLyrics
         var screen=new Point(point.X,point.Y);
         return InCover(screen) || InControls(screen) || InProgress(screen);
     }
+    bool GestureRegion(NativePoint point,bool right)
+    {
+        if(closed || !allowDisplay || !hasControlTrack || !IsWindowVisible(handle) || scrubbing || !PointerOverTaskbar(point))return false;
+        Rect bounds;GetWindowRect(handle,out bounds);
+        if(point.X<bounds.Left || point.X>=bounds.Right || point.Y<bounds.Top || point.Y>=bounds.Bottom)return false;
+        if(!right)return true;
+        var screen=new Point(point.X,point.Y);
+        if(InCover(screen))return false;
+        if(controlsViewport.Visibility==Visibility.Visible)
+            foreach(var button in new[]{previousButton,playButton,nextButton,favoriteButton})if(InElement(button,screen))return false;
+        return true;
+    }
     static void ForwardPointer(TaskbarLyrics surface,int message,NativePoint point)
     {
         Rect bounds;GetWindowRect(surface.handle,out bounds);
@@ -848,8 +881,12 @@ sealed class TaskbarLyrics
     static IntPtr OnWheel(int code,IntPtr message,IntPtr data)
     {
         try {
+        if(code>=0 && (message.ToInt64()==0x204 || message.ToInt64()==0x205 || message.ToInt64()==0x207 || message.ToInt64()==0x208)) {
+            var mouse=(MouseData)Marshal.PtrToStructure(data,typeof(MouseData));
+            if(HandleGesture((int)message.ToInt64(),mouse.Point))return new IntPtr(1);
+        }
         // 分层子窗口在部分任务栏上会被系统输入命中跳过；仅转发可交互控件的左键。
-        // 歌词、空白、右键与遮挡窗口继续走系统链，滚轮和点击共用同一个可卸载钩子。
+        // 歌词左键、区域外与遮挡窗口继续走系统链，各类点击共用可卸载钩子。
         if(code>=0 && (message.ToInt64()==0x201 || message.ToInt64()==0x202 || message.ToInt64()==0x200)) {
             var mouse=(MouseData)Marshal.PtrToStructure(data,typeof(MouseData));
             int eventId=(int)message.ToInt64();
@@ -873,6 +910,19 @@ sealed class TaskbarLyrics
         }
         } catch(Exception error) {Log("歌词滚轮命中检测失败："+error.Message);}
         return CallNextHookEx(wheelHook,code,message,data);
+    }
+    static bool HandleGesture(int eventId,NativePoint point)
+    {
+        bool down=eventId==0x204 || eventId==0x207;
+        bool right=eventId==0x204 || eventId==0x205;
+        if(down && gestureOwner==null && pointerOwner==null && scrubOwner==null)
+            foreach(var surface in instances)if(surface.GestureRegion(point,right)){gestureOwner=surface;gestureDown=eventId;break;}
+        if(gestureOwner==null || eventId!=(down?gestureDown:gestureDown+1))return false;
+        if(!down) {
+            var owner=gestureOwner;gestureOwner=null;gestureDown=0;
+            if(owner.GestureRegion(point,right))owner.SendAction(right?"nextTrack":"togglePlayback",0,true);
+        }
+        return true;
     }
     static async void FlushVolume()
     {
@@ -935,9 +985,10 @@ sealed class TaskbarLyrics
         favoriteButton.Foreground=controlsColor;
         favoriteGlyph.Fill=favorite?favoriteButton.Foreground:Brushes.Transparent;
     }
-    async void SendAction(string action,double value=0)
+    async void SendAction(string action,double value=0,bool gesture=false)
     {
-        if(actionPending || scrubOwner!=null || !hasControlTrack || !(action=="seek"?progressEnabled:hoverEnabled) || !allowDisplay)return;
+        bool gestureAction=gesture && (action=="nextTrack" || action=="togglePlayback");
+        if(actionPending || frameBusy || scrubOwner!=null || !hasControlTrack || !(gestureAction || (action=="seek"?progressEnabled:hoverEnabled)) || !allowDisplay)return;
         // 所有屏幕共享操作锁，等待播放器确认后统一更新图标。
         actionPending=true;foreach(var surface in instances)surface.RefreshControls();
         if(action=="seek")foreach(var surface in instances)surface.pendingSeekMs=value*1000;
@@ -946,6 +997,7 @@ sealed class TaskbarLyrics
             // .NET Framework 的 Query setter 会加问号，拼完后只赋值一次。
             string query=stateEndpoint.Query.TrimStart('?')+"&action="+Uri.EscapeDataString(action)+"&trackId="+Uri.EscapeDataString(controlTrackId);
             if(action=="seek")query+="&value="+value.ToString("R",CultureInfo.InvariantCulture);
+            if(gestureAction)query+="&gesture=1";
             url.Query=query;
             using(var response=await actions.PostAsync(url.Uri,new ByteArrayContent(new byte[0]))) {
                 string body=await response.Content.ReadAsStringAsync();

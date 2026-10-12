@@ -3,7 +3,7 @@
 基于 [CarsonGame/EchoMusic-TaskbarLyrics](https://github.com/CarsonGame/EchoMusic-TaskbarLyrics) 继续开发，由 fengjianhua7 维护。保留原项目的 MIT 许可证及版权声明。
 
 
-**v1.2.2** · EchoMusic 的 Windows 任务栏歌词插件，在任务栏左侧显示封面、同步歌词与悬浮播放操作。
+**v1.2.3** · EchoMusic 的 Windows 任务栏歌词插件，在任务栏左侧显示封面、同步歌词与悬浮播放操作。
 
 ## 功能
 
@@ -92,3 +92,10 @@ node tests/native-smoke.mjs --input --all
 ```
 
 `--secondary` 默认使用 Windows 设备标识 DISPLAY2；无该屏幕时宿主会回退到主屏幕，需检查输出的 DPI 是否符合预期。
+
+## v1.2.3 鼠标快捷操作
+
+- 右键点击插件内非按钮位置切换到下一曲，封面按钮和可见播放按钮不接收此右键快捷操作。
+- 中键点击插件区域播放／暂停；关闭悬停控件显示时仍可使用。
+- 按下后移出插件区域再松开会取消操作；插件外和遮挡窗口保留原有交互。
+- 原生回归测试 `node tests/native-smoke.mjs --gestures` 验证手势及排除区域，不移动鼠标、不向真实播放器发送命令。

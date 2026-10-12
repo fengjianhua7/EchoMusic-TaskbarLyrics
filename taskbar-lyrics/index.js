@@ -1145,7 +1145,8 @@ export async function activate(ctx) {
     const action = request.query.action;
     if (!['previousTrack','togglePlayback','nextTrack','toggleFavorite','seek'].includes(action)) return { status:400,body:'' };
     const seeking=action==='seek';
-    if (!settings.enabled || !(seeking?settings.hoverProgress:settings.hoverControls)) return { status:403,body:'' };
+    const gesture=request.query.gesture==='1' && ['nextTrack','togglePlayback'].includes(action);
+    if (!settings.enabled || !(gesture || (seeking?settings.hoverProgress:settings.hoverControls))) return { status:403,body:'' };
     if (commandBusy) return { status:409,body:JSON.stringify({error:'歌曲操作正在处理中'}) };
     updateSnapshot(await ctx.nowPlaying.getSnapshot());
     if (commandBusy) return { status:409,body:JSON.stringify({error:'歌曲操作正在处理中'}) };
