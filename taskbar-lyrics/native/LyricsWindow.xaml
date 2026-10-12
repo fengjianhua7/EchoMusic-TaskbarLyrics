@@ -1,8 +1,8 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="EchoMusic · 微光任务栏歌词" WindowStyle="None" ResizeMode="NoResize"
-        AllowsTransparency="True" Background="Transparent" ShowInTaskbar="False"
-        ShowActivated="False" Topmost="True" Focusable="False" Width="360" Height="48">
+        AllowsTransparency="False" Background="#010203" ShowInTaskbar="False"
+        ShowActivated="False" Topmost="False" Focusable="False" Width="360" Height="48">
   <Window.Resources>
     <SolidColorBrush x:Key="PrimaryWaiting" Color="#F1F7F6"/>
     <SolidColorBrush x:Key="SecondaryWaiting" Color="#B4C3C1"/>

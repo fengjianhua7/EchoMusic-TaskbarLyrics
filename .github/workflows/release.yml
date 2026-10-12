@@ -1,0 +1,82 @@
+name: Build and release plugin
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - taskbar-lyrics/manifest.json
+      - .github/workflows/release.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: plugin-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build and test
+        shell: pwsh
+        working-directory: taskbar-lyrics
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm install --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'npm install failed' }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw 'JavaScript build failed' }
+          npm test
+          if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
+          ./build-native.ps1
+      - name: Package runtime files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $taskVersion = (Get-Content taskbar-lyrics/manifest.json -Raw | ConvertFrom-Json).version
+          if ($taskVersion -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw 'Invalid version' }
+          $taskPackageRoot = Join-Path $env:RUNNER_TEMP 'plugin-package/taskbar-lyrics'
+          New-Item -ItemType Directory -Path (Join-Path $taskPackageRoot 'bin') -Force | Out-Null
+          foreach ($taskFile in @('manifest.json','index.js','settings.css','icon.svg','default-settings.json','README.md','LICENSE')) {
+            Copy-Item -LiteralPath (Join-Path 'taskbar-lyrics' $taskFile) -Destination $taskPackageRoot
+          }
+          Copy-Item -LiteralPath taskbar-lyrics/bin/TaskbarLyrics.exe -Destination (Join-Path $taskPackageRoot 'bin')
+          $taskArchive = Join-Path $env:RUNNER_TEMP "taskbar-lyrics-$taskVersion.zip"
+          Compress-Archive -LiteralPath $taskPackageRoot -DestinationPath $taskArchive
+          "PLUGIN_VERSION=$taskVersion" >> $env:GITHUB_ENV
+          "PLUGIN_ARCHIVE=$taskArchive" >> $env:GITHUB_ENV
+      - name: Publish versioned release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const version = process.env.PLUGIN_VERSION;
+            const tag = `v${version}`;
+            const repository = {owner: context.repo.owner, repo: context.repo.repo};
+            try {
+              await github.rest.repos.getReleaseByTag({...repository, tag});
+              core.info(`${tag} is already published; existing release stays unchanged.`);
+              return;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            const {data: release} = await github.rest.repos.createRelease({
+              ...repository, tag_name: tag, target_commitish: context.sha,
+              name: `任务栏歌词 · 微光增强版 ${tag}`,
+              body: fs.readFileSync('RELEASE_NOTES.md', 'utf8'),
+              draft: true, prerelease: version.includes('-')
+            });
+            await github.rest.repos.uploadReleaseAsset({
+              ...repository, release_id: release.id,
+              name: path.basename(process.env.PLUGIN_ARCHIVE),
+              data: fs.readFileSync(process.env.PLUGIN_ARCHIVE)
+            });
+            await github.rest.repos.updateRelease({...repository, release_id: release.id, draft: false});
+            core.info(`Published ${release.html_url}`);

@@ -33,6 +33,25 @@ sealed class TaskbarLyrics
     [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr FindWindowEx(IntPtr parent,IntPtr after,string cls,string title);
     [DllImport("user32.dll",EntryPoint="SetWindowLongPtrW",SetLastError=true)] static extern IntPtr SetWindowLongPtr(IntPtr hwnd,int index,IntPtr value);
     [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr hwnd);
+    [DllImport("user32.dll",SetLastError=true)] static extern IntPtr SetParent(IntPtr hwnd,IntPtr parent);
+    [DllImport("user32.dll")] static extern bool ScreenToClient(IntPtr hwnd,ref NativePoint point);
+    delegate IntPtr MouseHook(int code,IntPtr message,IntPtr data);
+    [StructLayout(LayoutKind.Sequential)] struct MouseData { public NativePoint Point; public uint Data,Flags,Time; public UIntPtr Extra; }
+    [DllImport("user32.dll",SetLastError=true)] static extern IntPtr SetWindowsHookEx(int id,MouseHook callback,IntPtr module,uint thread);
+    [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr hook,int code,IntPtr message,IntPtr data);
+    [DllImport("user32.dll")] static extern bool UnhookWindowsHookEx(IntPtr hook);
+    [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] static extern IntPtr GetModuleHandle(string name);
+    static readonly MouseHook wheelCallback=OnWheel;
+    static IntPtr wheelHook;
+    static double queuedVolumeDelta;
+    static bool volumeSending;
+    static TaskbarLyrics pointerOwner;
+    double volume;
+    int wheelRemainder;
+    Border volumeSurface;
+    ProgressBar volumeBar;
+    TextBlock volumeLabel;
+    readonly Stopwatch volumeClock=new Stopwatch();
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
     [DllImport("user32.dll")] static extern bool IsWindow(IntPtr hwnd);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
@@ -44,6 +63,7 @@ sealed class TaskbarLyrics
     [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr hwnd, int index, int value);
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hwnd, int command);
+    [DllImport("user32.dll",SetLastError=true)] static extern bool SetLayeredWindowAttributes(IntPtr hwnd,uint key,byte alpha,uint flags);
     [DllImport("user32.dll")] static extern bool GetWindowBand(IntPtr hwnd,out uint band);
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd,int attribute,out int value,int size);
     [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
@@ -56,9 +76,51 @@ sealed class TaskbarLyrics
     [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hwnd,uint command);
     [StructLayout(LayoutKind.Sequential)] struct NativePoint { public int X,Y; }
     [DllImport("user32.dll")] static extern bool GetCursorPos(out NativePoint point);
+    [DllImport("user32.dll")] static extern bool SetCursorPos(int x,int y);
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr hwnd,int message,IntPtr w,IntPtr l);
+    [StructLayout(LayoutKind.Sequential)] struct TestMouseInput {public int X,Y;public uint Data,Flags,Time;public UIntPtr Extra;}
+    [StructLayout(LayoutKind.Sequential)] struct TestInput {public uint Type;public TestMouseInput Mouse;}
+    [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,TestInput[] input,int size);
     [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(NativePoint point);
     [DllImport("shcore.dll")] static extern int SetProcessDpiAwareness(int awareness);
     Window window;
+    HwndSource surfaceSource;
+    Grid surfaceRoot;
+    IntPtr surfaceDc,surfaceBitmap,surfaceOldBitmap,surfacePixels;
+    RenderTargetBitmap surfaceImage;
+    byte[] surfaceBytes;
+    int surfaceWidth,surfaceHeight;
+    double surfaceDpi;
+    byte surfaceAlpha=255;
+    bool paintSucceeded;
+    int lastPaintError;
+    delegate IntPtr SurfaceProc(IntPtr hwnd,int message,IntPtr w,IntPtr l);
+    static readonly SurfaceProc defaultSurfaceProc=DefWindowProc;
+    static bool surfaceClassRegistered;
+    [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct SurfaceClass {
+        public uint Size,Style;public IntPtr Proc;public int ClassExtra,WindowExtra;
+        public IntPtr Instance,Icon,Cursor,Background;public string Menu,Name;public IntPtr SmallIcon;
+    }
+    [DllImport("user32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern ushort RegisterClassEx(ref SurfaceClass cls);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr DefWindowProc(IntPtr hwnd,int message,IntPtr w,IntPtr l);
+    readonly SurfaceProc surfaceCallback;
+    IntPtr previousSurfaceProc;
+    Button pressedButton;
+    bool pressedCover;
+    [DllImport("user32.dll")] static extern IntPtr CallWindowProc(IntPtr proc,IntPtr hwnd,int message,IntPtr w,IntPtr l);
+    [DllImport("user32.dll")] static extern IntPtr SetCapture(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern bool ReleaseCapture();
+    [DllImport("user32.dll")] static extern bool DestroyWindow(IntPtr hwnd);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern IntPtr CreateWindowEx(int ex,string cls,string title,int style,int x,int y,int width,int height,IntPtr parent,IntPtr menu,IntPtr module,IntPtr data);
+    [StructLayout(LayoutKind.Sequential)] struct NativeSize {public int Width,Height;}
+    [StructLayout(LayoutKind.Sequential,Pack=1)] struct Blend {public byte Op,Flags,Alpha,Format;}
+    [StructLayout(LayoutKind.Sequential)] struct BitmapInfo {public uint Size;public int Width,Height;public ushort Planes,Bits;public uint Compression,ImageSize;public int X,Y;public uint Used,Important;}
+    [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr dc,ref BitmapInfo info,uint usage,out IntPtr pixels,IntPtr section,uint offset);
+    [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc,IntPtr obj);
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
+    [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
+    [DllImport("user32.dll",SetLastError=true)] static extern bool UpdateLayeredWindow(IntPtr hwnd,IntPtr dstDc,ref NativePoint dst,ref NativeSize size,IntPtr srcDc,ref NativePoint src,uint key,ref Blend blend,uint flags);
     Grid coverHost,coverVisual,coverLayers,lyricsHost,controlsAnchor,interactionHost;
     RowDefinition infoRow,controlsRow,progressRow;
     bool hoverInfoEnabled=true;
@@ -218,7 +280,7 @@ sealed class TaskbarLyrics
 
     TaskbarLyrics(Display target)
     {
-        display=target;shellEvent=OnShellEvent;
+        display=target;shellEvent=OnShellEvent;surfaceCallback=SurfaceMessage;
             // 嵌入 XAML，发布时无需额外 UI 文件或运行时安装。
             using (Stream stream = typeof(TaskbarLyrics).Assembly.GetManifestResourceStream("LyricsWindow.xaml"))
                 window = (Window)System.Windows.Markup.XamlReader.Load(stream);
@@ -266,9 +328,35 @@ sealed class TaskbarLyrics
             playGlyph=(System.Windows.Shapes.Path)window.FindName("PlayGlyph");pauseGlyph=(System.Windows.Shapes.Path)window.FindName("PauseGlyph");favoriteGlyph=(System.Windows.Shapes.Path)window.FindName("FavoriteGlyph");
             previousButton.Click+=(sender,e)=>SendAction("previousTrack");playButton.Click+=(sender,e)=>SendAction("togglePlayback");nextButton.Click+=(sender,e)=>SendAction("nextTrack");favoriteButton.Click+=(sender,e)=>SendAction("toggleFavorite");
 
-        handle=new WindowInteropHelper(window).EnsureHandle();
-        SetWindowLong(handle,-20,GetWindowLong(handle,-20)|0x20|0x80|0x8000000);
-        HwndSource.FromHwnd(handle).AddHook(Hook);
+        surfaceRoot=(Grid)window.Content;
+        surfaceRoot.Resources=window.Resources;
+        window.Content=null;
+        IntPtr contentHost=FindWindowEx(display.Taskbar,IntPtr.Zero,"Windows.UI.Composition.DesktopWindowContentBridge",null);
+        ownerBar=contentHost!=IntPtr.Zero?contentHost:display.Taskbar;
+        if(!surfaceClassRegistered) {
+            var cls=new SurfaceClass {Size=(uint)Marshal.SizeOf(typeof(SurfaceClass)),Proc=Marshal.GetFunctionPointerForDelegate(defaultSurfaceProc),Instance=GetModuleHandle(null),Name="EchoMusic.TaskbarLyrics.Surface"};
+            if(RegisterClassEx(ref cls)==0)throw new InvalidOperationException("注册任务栏窗口类失败："+Marshal.GetLastWin32Error());
+            surfaceClassRegistered=true;
+        }
+        handle=CreateWindowEx(0x80800A0,"EchoMusic.TaskbarLyrics.Surface","EchoMusic Taskbar Lyrics",ownerBar!=IntPtr.Zero?0x46000000:unchecked((int)0x86000000u),0,0,360,48,ownerBar,IntPtr.Zero,GetModuleHandle(null),IntPtr.Zero);
+        if(handle==IntPtr.Zero)throw new InvalidOperationException("创建任务栏子窗口失败："+Marshal.GetLastWin32Error());
+        previousSurfaceProc=SetWindowLongPtr(handle,-4,Marshal.GetFunctionPointerForDelegate(surfaceCallback));
+        var parameters=new HwndSourceParameters("EchoMusic Lyrics Renderer") {ParentWindow=ownerBar,WindowStyle=ownerBar!=IntPtr.Zero?0x56000000:unchecked((int)0x96000000u),ExtendedWindowStyle=0x80000A0,PositionX=-32000,PositionY=-32000,Width=360,Height=48,UsesPerPixelOpacity=false};
+        surfaceSource=new HwndSource(parameters);
+        surfaceSource.CompositionTarget.RenderMode=RenderMode.SoftwareOnly;
+        surfaceSource.CompositionTarget.BackgroundColor=Colors.Transparent;
+        surfaceSource.RootVisual=surfaceRoot;
+        SetWindowLong(handle,-20,GetWindowLong(handle,-20)|0x20|0x80|0x8000000|0x80000);
+        var volumeContent=new StackPanel();
+        volumeLabel=new TextBlock {Foreground=Brushes.White,FontSize=12,TextAlignment=TextAlignment.Center};
+        volumeBar=new ProgressBar {Minimum=0,Maximum=100,Height=4,Width=100,Margin=new Thickness(0,3,0,0),Foreground=Brushes.Turquoise};
+        volumeContent.Children.Add(volumeLabel);volumeContent.Children.Add(volumeBar);
+        volumeSurface=new Border {Child=volumeContent,Background=new SolidColorBrush(Color.FromArgb(235,32,40,49)),CornerRadius=new CornerRadius(5),Padding=new Thickness(8,3,8,3),HorizontalAlignment=HorizontalAlignment.Center,VerticalAlignment=VerticalAlignment.Center,IsHitTestVisible=false,Visibility=Visibility.Collapsed};
+        surfaceRoot.Children.Add(volumeSurface);
+        if(instances.Count==0) {
+            wheelHook=SetWindowsHookEx(14,wheelCallback,GetModuleHandle(null),0);
+            if(wheelHook==IntPtr.Zero)Log("无法安装歌词滚轮钩子："+Marshal.GetLastWin32Error());
+        }
         instances.Add(this);
     }
     void Open()
@@ -277,8 +365,10 @@ sealed class TaskbarLyrics
         Rect initial=display.Info.Monitor;
         if(display.Taskbar!=IntPtr.Zero)GetWindowRect(display.Taskbar,out initial);
         else initial.Top=initial.Bottom-(int)Math.Round(48*display.Scale);
-        SetWindowPos(handle,IntPtr.Zero,initial.Left,initial.Top,(int)(360*display.Scale),initial.Height,0x14);
-        window.Opacity=0;window.Show();ShowWindow(handle,0);
+        var origin=new NativePoint {X=initial.Left,Y=initial.Top};
+        if(ownerBar!=IntPtr.Zero)ScreenToClient(ownerBar,ref origin);
+        SetWindowPos(handle,IntPtr.Zero,origin.X,origin.Y,(int)(360*display.Scale),initial.Height,0x14);
+        ShowWindow(handle,0);
         CompositionTarget.Rendering+=RenderScroll;
         pointerTimer=new DispatcherTimer(DispatcherPriority.Input){Interval=TimeSpan.FromMilliseconds(30)};
         pointerTimer.Tick+=(sender,e)=>UpdateHover();pointerTimer.Start();
@@ -288,8 +378,10 @@ sealed class TaskbarLyrics
     void Close()
     {
         closed=true;CancelScrub();CloseTrackNotice();pointerTimer.Stop();instances.Remove(this);
+        if(pointerOwner==this){pointerOwner=null;ReleaseCapture();}
+        if(instances.Count==0){UnhookWindowsHookEx(wheelHook);wheelHook=IntPtr.Zero;queuedVolumeDelta=0;}
         CompositionTarget.Rendering-=RenderScroll;
-        UnhookWinEvent(foregroundHook);UnhookWinEvent(reorderHook);window.Close();
+        UnhookWinEvent(foregroundHook);UnhookWinEvent(reorderHook);ReleaseSurface();surfaceSource.Dispose();if(IsWindow(handle))DestroyWindow(handle);window.Close();
     }
     object Report()
     {
@@ -297,7 +389,7 @@ sealed class TaskbarLyrics
                         return new {
                             text=primary.Text, secondary=secondary.Text, secondaryVisible=secondary.Visibility==Visibility.Visible,
                             fontSize=primary.FontSize, visualScale=VisualTreeHelper.GetDpi(primary).DpiScaleX, windowDpi=GetDpiForWindow(handle), screenScale=display.Scale, visible=IsWindowVisible(handle),
-                            taskbarDpi=GetDpiForWindow(display.Taskbar),layoutWidth=window.ActualWidth,layoutHeight=window.ActualHeight,
+                            taskbarDpi=GetDpiForWindow(display.Taskbar),layoutWidth=surfaceRoot.ActualWidth,layoutHeight=surfaceRoot.ActualHeight,
                             primaryOffset=primaryShift.X, secondaryOffset=secondaryShift.X,
                             textWidth=double.IsNaN(primary.Width) ? 0 : primary.Width,
                             viewportWidth=double.IsNaN(primaryViewport.Width) ? 0 : primaryViewport.Width,
@@ -318,6 +410,7 @@ sealed class TaskbarLyrics
                             maskVisible=masking, primaryMaskWidth=primaryMaskWidth,secondaryMaskWidth=secondaryMaskWidth,
                             singleText=true,primaryColorBoundary=primaryProgress.GradientStops[1].Offset,secondaryColorBoundary=secondaryProgress.GradientStops[1].Offset,
                             shellRaises=shellRaises,positionUpdates=positionUpdates,styleUpdates=styleUpdates, aboveTaskbar=AboveTaskbar(), shellCoversLyrics=ShellCoversLyrics(),
+                            embedded=display.Taskbar!=IntPtr.Zero && IsChild(display.Taskbar,handle),paintSucceeded=paintSucceeded,paintError=lastPaintError,childStyle=(GetWindowLong(handle,-16)&0x40000000)!=0,parent=GetParent(handle).ToInt64(),wheelHookActive=wheelHook!=IntPtr.Zero,volume=volume,volumeVisible=volumeSurface.Visibility==Visibility.Visible,
                             owned=ownerBar!=IntPtr.Zero && GetWindow(handle,4)==ownerBar,owner=GetWindow(handle,4).ToInt64(),taskbar=display.Taskbar.ToInt64(),windowBand=selfBand,taskbarBand=barBand,
                             hoverEnabled=hoverEnabled,controlsVisible=hovering,controlsEnabled=playButton.IsEnabled,isFavorite=favorite,playing=clockPlaying,
                             coverVisible=coverEnabled,coverLoaded=coverImage.Source!=null,coverShape=coverVisual.Clip is EllipseGeometry?"circle":"rectangle",coverAngle=coverRotation.Angle,
@@ -372,6 +465,10 @@ sealed class TaskbarLyrics
             var app=new Application {ShutdownMode=ShutdownMode.OnExplicitShutdown};
             var surfaces=new Dictionary<string,TaskbarLyrics>();
             var clock=Stopwatch.StartNew();var reorderClock=new Stopwatch();bool polling=false,reordered=false;int failures=0;
+            bool inputVerification=args.Length==3 && args[2]=="--verify-input",wheelVerified=false;
+            bool buttonVerification=args.Length==3 && args[2]=="--verify-buttons";
+            NativePoint originalCursor=new NativePoint();if(buttonVerification)GetCursorPos(out originalCursor);
+            int buttonStage=0;
             string inventory="";var screens=new List<Display>();DateTime checkedAt=DateTime.MinValue;
             var timer=new DispatcherTimer {Interval=TimeSpan.FromMilliseconds(100)};
             timer.Tick+=async(sender,e)=>{
@@ -402,13 +499,39 @@ sealed class TaskbarLyrics
                         surface.Apply(frame);
                     }
                     failures=0;
-                    if(args.Length==3 && !reordered && clock.ElapsedMilliseconds>=200){Process.Start(new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName,"--raise-taskbar"){UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden});reordered=true;reorderClock.Restart();}
-                    if(args.Length==2 || (args.Length==3 && reordered && reorderClock.ElapsedMilliseconds>=400)) {
+                    if(buttonVerification && clock.ElapsedMilliseconds>250+buttonStage*300 && buttonStage<9) {
+                        var surface=surfaces[targets[0].Info.Device];
+                        var buttons=new[]{surface.previousButton,surface.playButton,surface.nextButton,surface.favoriteButton};
+                        if(buttonStage==0){Point p=surface.ScreenPoint(surface.lyricsHost,new Point(surface.lyricsHost.ActualWidth/2,surface.lyricsHost.ActualHeight/2));SetCursorPos((int)p.X,(int)p.Y);}
+                        else {
+                            var button=buttons[(buttonStage-1)/2];Point p=surface.ScreenPoint(button,new Point(button.ActualWidth/2,button.ActualHeight/2));
+                            if(buttonStage%2==1)SetCursorPos((int)p.X,(int)p.Y);
+                            else {
+                                NativePoint cursor;GetCursorPos(out cursor);bool hit=WindowFromPoint(cursor)==surface.handle;
+                                Log("BUTTON TEST "+((buttonStage-1)/2)+" hit="+hit+" transparent="+((GetWindowLong(surface.handle,-20)&0x20)!=0)+" region="+surface.InControls(p)+" hovering="+surface.hovering+" cursor="+cursor.X+","+cursor.Y+" center="+p+" click="+surface.ClickRegion(cursor)+" hitHwnd="+WindowFromPoint(cursor)+" enabled="+button.IsEnabled);
+                                if(surface.ClickRegion(cursor)) {
+                                // 只在已命中测试窗口的控件时注入，命令发往测试服务；由真实钩子接收。
+                                var input=new[]{new TestInput {Mouse=new TestMouseInput {Flags=2}},new TestInput {Mouse=new TestMouseInput {Flags=4}}};
+                                if(SendInput(2,input,Marshal.SizeOf(typeof(TestInput)))!=2)throw new InvalidOperationException("按钮输入测试失败："+Marshal.GetLastWin32Error()); }
+                            }
+                        }
+                        buttonStage++;
+                    }
+                    if(inputVerification && !wheelVerified && clock.ElapsedMilliseconds>=250) {
+                        var surface=surfaces[targets[0].Info.Device];
+                        Point center=surface.ScreenPoint(surface.lyricsHost,new Point(surface.lyricsHost.ActualWidth/2,surface.lyricsHost.ActualHeight/2));
+                        var mouse=new MouseData {Point=new NativePoint {X=(int)center.X,Y=(int)center.Y},Data=120u<<16};
+                        IntPtr data=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(MouseData)));
+                        try {Marshal.StructureToPtr(mouse,data,false);OnWheel(0,new IntPtr(0x20A),data);}finally {Marshal.FreeHGlobal(data);}
+                        wheelVerified=true;
+                    }
+                    if(args.Length==3 && !inputVerification && !buttonVerification && !reordered && clock.ElapsedMilliseconds>=200){Process.Start(new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName,"--raise-taskbar"){UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden});reordered=true;reorderClock.Restart();}
+                    if(args.Length==2 || (buttonVerification && clock.ElapsedMilliseconds>=3300) || (inputVerification && clock.ElapsedMilliseconds>=700) || (args.Length==3 && reordered && reorderClock.ElapsedMilliseconds>=400)) {
                         var reports=new Dictionary<string,object>();foreach(var item in surfaces)reports.Add(item.Key,item.Value.Report());
                         // 保留旧验证报告字段，并附上各屏幕窗口以验证选择结果。
                         var first=json.Deserialize<Dictionary<string,object>>(json.Serialize(surfaces[targets[0].Info.Device].Report()));
                         first["screens"]=Inventory(screens);first["surfaces"]=reports;
-                        File.WriteAllText(args[1],json.Serialize(first),Encoding.UTF8);app.Shutdown();
+                        File.WriteAllText(args[1],json.Serialize(first),Encoding.UTF8);if(buttonVerification)SetCursorPos(originalCursor.X,originalCursor.Y);app.Shutdown();
                     }
                 } catch(Exception ex) {
                     failures++;if(failures==3)foreach(var surface in surfaces.Values)ShowWindow(surface.handle,0);
@@ -425,9 +548,54 @@ sealed class TaskbarLyrics
         if (message == 0x84) {
             // 封面、按钮与进度条接收点击，其余区域仍穿透到任务栏。
             var point=new Point(unchecked((short)(l.ToInt64()&0xffff)),unchecked((short)((l.ToInt64()>>16)&0xffff)));
-            handled=true;return new IntPtr(scrubbing || (allowDisplay && InCover(point)) || (hovering && (InControls(point) || InProgress(point)))?1:-1);
+            handled=true;return new IntPtr(scrubbing || (allowDisplay && InCover(point)) || (allowDisplay && (InControls(point) || InProgress(point)))?1:-1);
         }
         return IntPtr.Zero;
+    }
+    Point ScreenPoint(FrameworkElement element,Point local)
+    {
+        Point position=element.TransformToAncestor(surfaceRoot).Transform(local);
+        Rect bounds;GetWindowRect(handle,out bounds);double scale=GetDpiForWindow(handle)/96.0;
+        return new Point(bounds.Left+position.X*scale,bounds.Top+position.Y*scale);
+    }
+    bool InElement(FrameworkElement element,Point screen)
+    {
+        if(element.Visibility!=Visibility.Visible || element.ActualWidth<=0 || element.ActualHeight<=0)return false;
+        return new System.Windows.Rect(ScreenPoint(element,new Point()),ScreenPoint(element,new Point(element.ActualWidth,element.ActualHeight))).Contains(screen);
+    }
+    IntPtr SurfaceMessage(IntPtr hwnd,int message,IntPtr w,IntPtr l)
+    {
+        bool handled=false;IntPtr result=Hook(hwnd,message,w,l,ref handled);if(handled)return result;
+        if(message==0x201 || message==0x202 || message==0x200) {
+            Rect bounds;GetWindowRect(handle,out bounds);
+            Point screen=new Point(bounds.Left+unchecked((short)(l.ToInt64()&0xffff)),bounds.Top+unchecked((short)((l.ToInt64()>>16)&0xffff)));
+            if(message==0x201) {
+                if(InProgress(screen)){
+                    Point first=ScreenPoint(progressTrack,new Point());
+                    BeginScrub((screen.X-first.X)/(progressTrack.ActualWidth*GetDpiForWindow(handle)/96.0));
+                    if(scrubbing)SetCapture(handle);
+                } else {
+                    pressedCover=InCover(screen);pressedButton=null;
+                    if(InControls(screen))foreach(var button in new[]{previousButton,playButton,nextButton,favoriteButton})if(button.IsEnabled && InElement(button,screen)){pressedButton=button;break;}
+                    if(pressedCover || pressedButton!=null)SetCapture(handle);
+                }
+                return IntPtr.Zero;
+            }
+            if(scrubbing) {
+                Point first=ScreenPoint(progressTrack,new Point());
+                scrubRatio=ClampRatio((screen.X-first.X)/(progressTrack.ActualWidth*GetDpiForWindow(handle)/96.0));
+                if(message==0x202){FinishScrub();ReleaseCapture();}else RenderScroll(null,EventArgs.Empty);
+                return IntPtr.Zero;
+            }
+            if(message==0x202) {
+                Button button=pressedButton;bool cover=pressedCover;pressedButton=null;pressedCover=false;ReleaseCapture();
+                if(cover && InCover(screen))ShowMainWindow();
+                else if(button!=null && button.IsEnabled && InElement(button,screen))SendAction(button==previousButton?"previousTrack":button==nextButton?"nextTrack":button==favoriteButton?"toggleFavorite":"togglePlayback");
+                return IntPtr.Zero;
+            }
+        }
+        if(message==0x215){pressedCover=false;pressedButton=null;if(scrubbing)CancelScrub();}
+        return CallWindowProc(previousSurfaceProc,hwnd,message,w,l);
     }
 
     void CloseTrackNotice(){noticeVisible=false;noticeViewport.Visibility=Visibility.Collapsed;}
@@ -521,7 +689,9 @@ sealed class TaskbarLyrics
         progressHost.Visibility=(value || hoverAmount>0) && progressEnabled?Visibility.Visible:Visibility.Collapsed;
         SetProgressHover(value && progressHovered);
         int style=GetWindowLong(handle,-20);
-        int desired=pointerInside?style&~0x20:style|0x20;
+        NativePoint cursor;bool interactive=pointerInside && GetCursorPos(out cursor) &&
+            (InCover(new Point(cursor.X,cursor.Y)) || InControls(new Point(cursor.X,cursor.Y)) || InProgress(new Point(cursor.X,cursor.Y)));
+        int desired=interactive || scrubbing?style&~0x20:style|0x20;
         // 仅在穿透状态改变时写入，避免鼠标检测反复触发窗口更新。
         if(desired!=style){SetWindowLong(handle,-20,desired);styleUpdates++;}
     }
@@ -598,22 +768,23 @@ sealed class TaskbarLyrics
     bool InCover(Point screen)
     {
         if(!coverEnabled || coverHost.Visibility!=Visibility.Visible)return false;
-        Point first=coverHost.PointToScreen(new Point(0,0)),last=coverHost.PointToScreen(new Point(coverHost.ActualWidth,coverHost.ActualHeight));
+        Point first=ScreenPoint(coverHost,new Point(0,0)),last=ScreenPoint(coverHost,new Point(coverHost.ActualWidth,coverHost.ActualHeight));
         return new System.Windows.Rect(first,last).Contains(screen);
     }
     void UpdateHover()
     {
+        if(volumeClock.IsRunning && volumeClock.ElapsedMilliseconds>1200){volumeSurface.Visibility=Visibility.Collapsed;volumeClock.Reset();}
         NativePoint point=new NativePoint();Rect bounds;
         bool cursor=GetCursorPos(out point);
-        if(scrubbing){SetHover(true);SetProgressHover(true);return;}
+        if(scrubbing || pointerOwner==this){SetHover(true);SetProgressHover(scrubbing);return;}
         bool inside=allowDisplay && IsWindowVisible(handle) && cursor;
         if(inside) {
             GetWindowRect(handle,out bounds);
             IntPtr hit=WindowFromPoint(point),bar=display.Taskbar;
             var name=new StringBuilder(256);if(bar==IntPtr.Zero)GetClassName(hit,name,name.Capacity);
-            inside=point.X>=bounds.Left && point.X<bounds.Right && point.Y>=bounds.Top && point.Y<bounds.Bottom &&
-                (hit==handle || hit==bar || (bar!=IntPtr.Zero && (IsChild(bar,hit) || GetAncestor(hit,2)==bar)) || (bar==IntPtr.Zero && (name.ToString()=="Progman" || name.ToString()=="WorkerW")));
+            inside=point.X>=bounds.Left && point.X<bounds.Right && point.Y>=bounds.Top && point.Y<bounds.Bottom && PointerOverTaskbar(point);
         }
+        if(!inside)wheelRemainder=0;
         SetCoverHover(inside && InCover(new Point(point.X,point.Y)));
         // 信息也在宿主内；先确认窗口未被遮挡，再更新悬停。
         SetHover(inside);
@@ -624,22 +795,102 @@ sealed class TaskbarLyrics
     bool InControls(Point screen)
     {
         if(controlsViewport.Visibility!=Visibility.Visible || controlsSurface.ActualWidth<=0 || controlsSurface.ActualHeight<=0)return false;
-        Point first=controlsSurface.PointToScreen(new Point(0,0)),last=controlsSurface.PointToScreen(new Point(controlsSurface.ActualWidth,controlsSurface.ActualHeight));
+        Point first=ScreenPoint(controlsSurface,new Point(0,0)),last=ScreenPoint(controlsSurface,new Point(controlsSurface.ActualWidth,controlsSurface.ActualHeight));
         return new System.Windows.Rect(first,last).Contains(screen);
     }
     bool InProgress(Point screen)
     {
         if(progressHost.Visibility!=Visibility.Visible || progressTrack.ActualWidth<=0)return false;
-        Point first=progressTrack.PointToScreen(new Point(0,0)),last=progressTrack.PointToScreen(new Point(progressTrack.ActualWidth,progressTrack.ActualHeight));
+        Point first=ScreenPoint(progressTrack,new Point(0,0)),last=ScreenPoint(progressTrack,new Point(progressTrack.ActualWidth,progressTrack.ActualHeight));
         return new System.Windows.Rect(first,last).Contains(screen);
     }
     bool InProgressTime(Point screen)
     {
         if(progressTimeViewport.Visibility!=Visibility.Visible)return false;
-        Point first=progressTimeViewport.PointToScreen(new Point(0,0)),last=progressTimeViewport.PointToScreen(new Point(progressTimeViewport.ActualWidth,progressTimeViewport.ActualHeight));
+        Point first=ScreenPoint(progressTimeViewport,new Point(0,0)),last=ScreenPoint(progressTimeViewport,new Point(progressTimeViewport.ActualWidth,progressTimeViewport.ActualHeight));
         return new System.Windows.Rect(first,last).Contains(screen);
     }
     static double ClampRatio(double value){return double.IsNaN(value)?0:Math.Max(0,Math.Min(1,value));}
+    bool WheelRegion(NativePoint point)
+    {
+        if(closed || !allowDisplay || !IsWindowVisible(handle) || scrubbing || !IsWindow(display.Taskbar))return false;
+        Point first=ScreenPoint(lyricsHost,new Point(0,0)),last=ScreenPoint(lyricsHost,new Point(lyricsHost.ActualWidth,lyricsHost.ActualHeight));
+        Rect bounds;GetWindowRect(handle,out bounds);
+        if(!new System.Windows.Rect(first,last).Contains(new Point(point.X,point.Y)) || point.X<bounds.Left || point.X>=bounds.Right || point.Y<bounds.Top || point.Y>=bounds.Bottom)return false;
+        return PointerOverTaskbar(point);
+    }
+    bool PointerOverTaskbar(NativePoint point)
+    {
+        IntPtr bar=display.Taskbar,hit=WindowFromPoint(point);
+        if(bar==IntPtr.Zero || !IsWindowVisible(bar))return false;
+        if(hit==handle || hit==bar || IsChild(bar,hit))return true;
+        // Acrylic and layered children can expose an underlying app to WindowFromPoint.
+        // Accept it only when its root window is below the taskbar in the actual Z order.
+        IntPtr root=GetAncestor(hit,2);
+        for(IntPtr item=GetWindow(bar,2);item!=IntPtr.Zero;item=GetWindow(item,2))if(item==root)return true;
+        return false;
+    }
+    bool ClickRegion(NativePoint point)
+    {
+        if(closed || !allowDisplay || !IsWindowVisible(handle))return false;
+        Rect bounds;GetWindowRect(handle,out bounds);
+        if(point.X<bounds.Left || point.X>=bounds.Right || point.Y<bounds.Top || point.Y>=bounds.Bottom)return false;
+        if(!PointerOverTaskbar(point))return false;
+        var screen=new Point(point.X,point.Y);
+        return InCover(screen) || InControls(screen) || InProgress(screen);
+    }
+    static void ForwardPointer(TaskbarLyrics surface,int message,NativePoint point)
+    {
+        Rect bounds;GetWindowRect(surface.handle,out bounds);
+        long coordinates=((long)(point.Y-bounds.Top)&0xffff)<<16 | ((long)(point.X-bounds.Left)&0xffff);
+        SendMessage(surface.handle,message,new IntPtr(message==0x202?0:1),new IntPtr(coordinates));
+    }
+    static IntPtr OnWheel(int code,IntPtr message,IntPtr data)
+    {
+        try {
+        // 分层子窗口在部分任务栏上会被系统输入命中跳过；仅转发可交互控件的左键。
+        // 歌词、空白、右键与遮挡窗口继续走系统链，滚轮和点击共用同一个可卸载钩子。
+        if(code>=0 && (message.ToInt64()==0x201 || message.ToInt64()==0x202 || message.ToInt64()==0x200)) {
+            var mouse=(MouseData)Marshal.PtrToStructure(data,typeof(MouseData));
+            int eventId=(int)message.ToInt64();
+            if(eventId==0x201 && pointerOwner==null)foreach(var surface in instances)if(surface.ClickRegion(mouse.Point)){pointerOwner=surface;break;}
+            if(pointerOwner!=null) {
+                var owner=pointerOwner;
+                if(eventId==0x202)pointerOwner=null;
+                ForwardPointer(owner,eventId,mouse.Point);
+                return new IntPtr(1);
+            }
+        }
+        // 仅拦截实际歌词区域的滚轮。歌词仍保持点击穿透，不靠透明背景抢占任务栏点击。
+        if(code>=0 && message.ToInt64()==0x20A) {
+            var mouse=(MouseData)Marshal.PtrToStructure(data,typeof(MouseData));
+            foreach(var surface in instances)if(surface.WheelRegion(mouse.Point)) {
+                surface.wheelRemainder+=unchecked((short)(mouse.Data>>16));
+                int steps=surface.wheelRemainder/120;surface.wheelRemainder%=120;
+                if(steps!=0){queuedVolumeDelta=Math.Max(-100,Math.Min(100,queuedVolumeDelta+steps*5));surface.window.Dispatcher.BeginInvoke(new Action(FlushVolume));}
+                return new IntPtr(1);
+            }
+        }
+        } catch(Exception error) {Log("歌词滚轮命中检测失败："+error.Message);}
+        return CallNextHookEx(wheelHook,code,message,data);
+    }
+    static async void FlushVolume()
+    {
+        if(volumeSending || stateEndpoint==null)return;
+        volumeSending=true;
+        try {
+            while(queuedVolumeDelta!=0 && instances.Count>0) {
+                double delta=queuedVolumeDelta;queuedVolumeDelta=0;
+                var url=new UriBuilder(stateEndpoint);url.Path="/volume";url.Query=stateEndpoint.Query.TrimStart('?')+"&delta="+delta.ToString("R",CultureInfo.InvariantCulture);
+                using(var response=await actions.PostAsync(url.Uri,new ByteArrayContent(new byte[0]))) {
+                    if(!response.IsSuccessStatusCode){Log("调节音量失败：HTTP "+(int)response.StatusCode);continue;}
+                    var result=json.Deserialize<Dictionary<string,object>>(await response.Content.ReadAsStringAsync());
+                    foreach(var surface in instances){surface.volume=ClampRatio(Convert.ToDouble(result["volume"])/100)*100;surface.volumeBar.Value=surface.volume;surface.volumeLabel.Text="音量 "+Math.Round(surface.volume)+"%";surface.volumeSurface.Visibility=Visibility.Visible;surface.volumeClock.Restart();}
+                }
+            }
+        }catch(Exception error){queuedVolumeDelta=0;Log("调节音量失败："+error.Message);}
+        finally{volumeSending=false;}
+    }
     async void ShowMainWindow()
     {
         if(!coverEnabled || !allowDisplay || mainWindowPending)return;
@@ -663,7 +914,7 @@ sealed class TaskbarLyrics
     {
         if(!scrubbing)return;
         scrubbing=false;if(scrubOwner==this)scrubOwner=null;
-        progressTrack.ReleaseMouseCapture();foreach(var surface in instances)surface.RefreshControls();
+        ReleaseCapture();foreach(var surface in instances)surface.RefreshControls();
         SetProgressHover(progressTrack.IsMouseOver);
     }
     void FinishScrub()
@@ -816,9 +1067,19 @@ sealed class TaskbarLyrics
 
     void OwnTaskbar(IntPtr bar)
     {
-        if(ownerBar==bar && GetWindow(handle,4)==bar)return;
-        // 关联任务栏所有者，保持透明浮窗高于任务栏，避免跨进程子窗口绘制异常。
-        SetWindowLongPtr(handle,-8,bar);ownerBar=GetWindow(handle,4);
+        if(bar==IntPtr.Zero || !IsWindow(bar))return;
+        IntPtr content=FindWindowEx(bar,IntPtr.Zero,"Windows.UI.Composition.DesktopWindowContentBridge",null);
+        IntPtr host=content!=IntPtr.Zero?content:bar;
+        if(ownerBar==host && GetParent(handle)==host)return;
+        ShowWindow(handle,0);
+        int style=GetWindowLong(handle,-16);
+        SetWindowLong(handle,-16,(style & unchecked((int)~0x80000000u)) | 0x40000000);
+        SetWindowLong(handle,-20,GetWindowLong(handle,-20)&~8);
+        SetParent(handle,host);
+        if(GetParent(handle)!=host){SetWindowLong(handle,-16,style);ownerBar=IntPtr.Zero;Log("任务栏嵌入失败："+Marshal.GetLastWin32Error());return;}
+        ownerBar=host;
+        if(surfaceSource!=null)SetParent(surfaceSource.Handle,host);
+        SetWindowPos(handle,IntPtr.Zero,0,0,0,0,0x37);
     }
     void Position(Rect area)
     {
@@ -828,12 +1089,16 @@ sealed class TaskbarLyrics
         if(!moved && !showing)return;
         // 位置变化保留原有层级；首次显示才同时进入置顶层。
         uint flags=0x10u | (showing?0x40u:0x4u);
-        if(SetWindowPos(handle,new IntPtr(-1),area.Left,area.Top,area.Width,area.Height,flags))positionUpdates++;
+        var origin=new NativePoint {X=area.Left,Y=area.Top};
+        if(ownerBar!=IntPtr.Zero && GetParent(handle)==ownerBar)ScreenToClient(ownerBar,ref origin);
+        if(SetWindowPos(handle,IntPtr.Zero,origin.X,origin.Y,area.Width,area.Height,flags))positionUpdates++;
+        SetWindowPos(surfaceSource.Handle,IntPtr.Zero,-32000,-32000,area.Width,area.Height,0x14);
         if(showing)unresolvedShellCover=IntPtr.Zero;
         EnsureLayer();
     }
     void EnsureLayer()
     {
+        if(ownerBar!=IntPtr.Zero && GetParent(handle)==ownerBar)return;
         if(!allowDisplay || !IsWindowVisible(handle))return;
         // 每帧检查实际层级，异常立即恢复；正常时不调用置顶接口。
         bool above=AboveTaskbar(),topmost=(GetWindowLong(handle,-20)&8)!=0;IntPtr cover=FindShellCover();
@@ -844,6 +1109,7 @@ sealed class TaskbarLyrics
     }
     void RestoreLayer()
     {
+        if(ownerBar!=IntPtr.Zero && GetParent(handle)==ownerBar)return;
         IntPtr cover=FindShellCover();
         if(!SetWindowPos(handle,new IntPtr(-1),0,0,0,0,0x13))return;
         shellRaises++;
@@ -856,7 +1122,7 @@ sealed class TaskbarLyrics
     bool AboveTaskbar()
     {
         IntPtr bar=display.Taskbar;
-        if(bar==IntPtr.Zero || GetParent(handle)==bar)return true;
+        if(bar==IntPtr.Zero || IsChild(bar,handle))return true;
         for(IntPtr item=GetWindow(handle,2);item!=IntPtr.Zero;item=GetWindow(item,2)) if(item==bar) return true;
         return false;
     }
@@ -890,6 +1156,10 @@ sealed class TaskbarLyrics
 
     void Apply(Dictionary<string,object> frame)
     {
+        if(frame.ContainsKey("volume") && frame["volume"]!=null) {
+            volume=ClampRatio(Convert.ToDouble(frame["volume"])/100)*100;
+            volumeBar.Value=volume;volumeLabel.Text="音量 "+Math.Round(volume)+"%";
+        }
         // 辅助程序先更新、播放器尚未重载时，也兼容旧版配置快照。
         var s=new Dictionary<string,object>(defaults);
         foreach(var setting in (Dictionary<string,object>)frame["settings"])s[setting.Key]=setting.Value;
@@ -901,10 +1171,7 @@ sealed class TaskbarLyrics
         double scale=Math.Max(.5,GetDpiForWindow(handle)/96.0);
         if(taskbar!=IntPtr.Zero) {
             if(!GetWindowRect(taskbar,out bar) || bar.Height<4 || bar.Width<4 || !IsWindowVisible(taskbar)){allowDisplay=false;CancelScrub();CloseTrackNotice();SetHover(false);ShowWindow(handle,0);return;}
-        }else {
-            // 副屏未启用系统任务栏时，在该屏底边保留歌词显示。
-            bar.Top=bar.Bottom-(int)Math.Round(48*scale);
-        }
+        }else {allowDisplay=false;CancelScrub();SetHover(false);ShowWindow(handle,0);return;}
         var monitor=new MonitorInfo { Size=Marshal.SizeOf(typeof(MonitorInfo)) };
         GetMonitorInfo(display.Monitor,ref monitor);
         bool outside=bar.Top >= monitor.Monitor.Bottom-2 || bar.Bottom <= monitor.Monitor.Top+2 || bar.Left >= monitor.Monitor.Right-2 || bar.Right <= monitor.Monitor.Left+2;
@@ -912,8 +1179,9 @@ sealed class TaskbarLyrics
             (Convert.ToBoolean(s["hidePaused"]) && !Convert.ToBoolean(frame["playing"])) ||
             (Convert.ToBoolean(s["hideFullscreen"]) && Fullscreen(taskbar));
         allowDisplay=!hide;
-        if (hide) { CancelScrub();CloseTrackNotice();SetHover(false);ShowWindow(handle,0); return; }
+        if (hide) { CancelScrub();CloseTrackNotice();volumeSurface.Visibility=Visibility.Collapsed;volumeClock.Reset();SetHover(false);ShowWindow(handle,0); return; }
         OwnTaskbar(taskbar);
+        if(!IsChild(taskbar,handle)){allowDisplay=false;SetHover(false);return;}
         Rect area=Placement(bar,scale,s);
         // WPF 使用逻辑像素，偏移自动适配每块屏幕的 DPI。
         verticalShift.Y=s.ContainsKey("verticalOffset")?Math.Max(-20,Math.Min(20,Convert.ToDouble(s["verticalOffset"]))):0;
@@ -998,10 +1266,11 @@ sealed class TaskbarLyrics
         SizeLyrics(lyricsText.Visibility==Visibility.Visible);
         secondary.Visibility=dualLyrics ? Visibility.Visible : Visibility.Collapsed;
         secondaryViewport.Visibility=secondary.Visibility;
-        window.Opacity=Convert.ToDouble(s["opacity"])/100;
+        double alpha=Convert.ToDouble(s["opacity"])/100;
+        surfaceAlpha=(byte)Math.Round(alpha*255);
         // 抵消整体透明度，避免点击底层被舍入成完全透明的像素。
         var hitBackground=(SolidColorBrush)window.Resources["ButtonHitBackground"];
-        byte hitAlpha=(byte)Math.Min(255,Math.Ceiling(1/Math.Max(1.0/255,window.Opacity)));
+        byte hitAlpha=(byte)Math.Min(255,Math.Ceiling(1/Math.Max(1.0/255,alpha)));
         if(hitBackground.Color.A!=hitAlpha)hitBackground.Color=Color.FromArgb(hitAlpha,0,0,0);
         string theme=Convert.ToString(s["theme"]);
         bool light=theme=="light" || (theme=="auto" && TaskbarLight());
@@ -1145,8 +1414,8 @@ sealed class TaskbarLyrics
         observedLyricTimeline=timelineMs;
         if(appliedLyricTransitionKey!=key){
             appliedLyricTransitionKey=key;lyricTransitionSuppressed=lyricsText.Visibility!=Visibility.Visible;
-            ResetLyricTransition();window.UpdateLayout();
-            var root=(Grid)window.Content;
+            ResetLyricTransition();surfaceRoot.UpdateLayout();
+            var root=surfaceRoot;
             Point bottom=lyricsText.TransformToAncestor(root).Transform(new Point(0,lyricsText.ActualHeight));
             // 空间不足时只淡入，避免移动时裁切任务栏边缘。
             lyricTransitionTravel=Math.Min(3,Math.Max(0,root.ActualHeight-bottom.Y-1));
@@ -1240,6 +1509,7 @@ sealed class TaskbarLyrics
         ColorProgress(secondary,secondaryProgress,secondaryWaiting,secondaryMasking,secondaryMaskWidth,secondaryTextWidth);
         RenderLyricTransition();
         RenderHoverUi();
+        PaintSurface();
     }
     static void ColorProgress(TextBlock text,LinearGradientBrush brush,SolidColorBrush waiting,bool enabled,double playedWidth,double textWidth)
     {
@@ -1255,6 +1525,35 @@ sealed class TaskbarLyrics
         double travel=distance/26,phase=seconds%(travel*2+1.6);
         if(phase<.8)return 0;if(phase<.8+travel)return -(phase-.8)*26;
         if(phase<1.6+travel)return -distance;return -distance+(phase-1.6-travel)*26;
+    }
+    void ReleaseSurface()
+    {
+        if(surfaceDc!=IntPtr.Zero){SelectObject(surfaceDc,surfaceOldBitmap);DeleteObject(surfaceBitmap);DeleteDC(surfaceDc);}
+        surfaceDc=surfaceBitmap=surfacePixels=IntPtr.Zero;surfaceImage=null;
+    }
+    void PaintSurface()
+    {
+        if(closed || !allowDisplay || !IsWindowVisible(handle))return;
+        Rect bounds;if(!GetWindowRect(handle,out bounds) || bounds.Width<=0 || bounds.Height<=0)return;
+        double dpi=Math.Max(96,GetDpiForWindow(handle));
+        if(surfaceImage==null || surfaceWidth!=bounds.Width || surfaceHeight!=bounds.Height || surfaceDpi!=dpi) {
+            ReleaseSurface();surfaceWidth=bounds.Width;surfaceHeight=bounds.Height;surfaceDpi=dpi;
+            surfaceDc=CreateCompatibleDC(IntPtr.Zero);
+            var info=new BitmapInfo {Size=40,Width=surfaceWidth,Height=-surfaceHeight,Planes=1,Bits=32};
+            surfaceBitmap=CreateDIBSection(surfaceDc,ref info,0,out surfacePixels,IntPtr.Zero,0);
+            if(surfaceBitmap==IntPtr.Zero)throw new InvalidOperationException("创建任务栏绘制缓冲区失败");
+            surfaceOldBitmap=SelectObject(surfaceDc,surfaceBitmap);
+            surfaceImage=new RenderTargetBitmap(surfaceWidth,surfaceHeight,dpi,dpi,PixelFormats.Pbgra32);
+            surfaceBytes=new byte[surfaceWidth*surfaceHeight*4];
+            int style=GetWindowLong(handle,-20);SetWindowLong(handle,-20,style&~0x80000);SetWindowLong(handle,-20,style|0x80000);
+        }
+        surfaceRoot.UpdateLayout();surfaceImage.Clear();surfaceImage.Render(surfaceRoot);
+        surfaceImage.CopyPixels(surfaceBytes,surfaceWidth*4,0);Marshal.Copy(surfaceBytes,0,surfacePixels,surfaceBytes.Length);
+        var size=new NativeSize {Width=surfaceWidth,Height=surfaceHeight};var source=new NativePoint();
+        var blend=new Blend {Alpha=surfaceAlpha,Format=1};
+        var destination=new NativePoint {X=bounds.Left,Y=bounds.Top};ScreenToClient(ownerBar,ref destination);
+        paintSucceeded=UpdateLayeredWindow(handle,IntPtr.Zero,ref destination,ref size,surfaceDc,ref source,0,ref blend,2);
+        if(!paintSucceeded){int error=Marshal.GetLastWin32Error();if(error!=lastPaintError)Log("任务栏绘制提交失败："+error);lastPaintError=error;}else lastPaintError=0;
     }
     static string FormatTime(double milliseconds)
     {
@@ -1300,7 +1599,7 @@ sealed class TaskbarLyrics
             var s=new Dictionary<string,object>(defaults); s["layout"]=layout; s["theme"]=theme;
             Style(s,48,new Dictionary<string,object>());
             window.Width=420; window.Height=48;
-            var root=(Grid)window.Content;
+            var root=surfaceRoot;
             root.Background=new SolidColorBrush((Color)ColorConverter.ConvertFromString(theme=="dark" ? "#202831" : "#E8EDEF"));
             root.Width=420; root.Height=48;
             ColorProgress(primary,primaryProgress,primaryWaiting,mask,TextWidth(primary.Text,primary)*.55,TextWidth(primary.Text,primary));

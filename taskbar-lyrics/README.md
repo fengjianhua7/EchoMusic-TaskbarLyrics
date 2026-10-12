@@ -1,6 +1,9 @@
-# 任务栏歌词 · 微光
+# 任务栏歌词 · 微光（增强版）
 
-**v1.1.5** · EchoMusic 的 Windows 任务栏歌词插件，在任务栏左侧显示封面、同步歌词与悬浮播放操作。
+基于 [CarsonGame/EchoMusic-TaskbarLyrics](https://github.com/CarsonGame/EchoMusic-TaskbarLyrics) 继续开发，由 fengjianhua7 维护。保留原项目的 MIT 许可证及版权声明。
+
+
+**v1.2.2** · EchoMusic 的 Windows 任务栏歌词插件，在任务栏左侧显示封面、同步歌词与悬浮播放操作。
 
 ## 功能
 
@@ -23,7 +26,7 @@
 在 EchoMusic 插件管理中添加插件源，安装并启用“任务栏歌词 · 微光”：
 
 ```text
-https://github.com/CarsonGame/EchoMusic-TaskbarLyrics
+https://github.com/fengjianhua7/EchoMusic-TaskbarLyrics
 ```
 
 也可下载本仓库，将完整的 `taskbar-lyrics` 文件夹放入 `%APPDATA%\echo-music\plugins`，刷新插件管理后启用。首次启动请允许插件运行辅助程序；成品已包含，无需编译。更新文件后关闭再开启插件。
@@ -51,3 +54,41 @@ powershell -ExecutionPolicy Bypass -File .\build-native.ps1
 ## 许可
 
 [MIT License](LICENSE)
+
+## v1.2.0 任务栏嵌入与音量交互
+
+- 使用 `SetParent` 将歌词 HWND 设为对应任务栏的子窗口，切换为 `WS_CHILD`，移除置顶样式。屏幕位置先经过 `ScreenToClient` 转换，避免任务栏非零原点和副屏坐标错位。
+- 任务栏不存在或嵌入失败时隐藏歌词；不会回退为桌面置顶浮窗。Explorer 重建任务栏后沿用原有屏幕枚举逻辑重新创建或挂接窗口。
+- 鼠标在歌词区域滚轮上调／下调 EchoMusic 音量，每格 5%，范围 0–100%。高分辨率滚轮累计到一格再调节；连续滚动合并并串行提交。
+- 通过官方 `ctx.player.volume` / `ctx.player.setVolume` 读写播放器音量。音量条显示播放器返回的音量，约 1.2 秒后自动隐藏；它不接受点击。
+- 歌词和空白处保留点击穿透；封面、已显示的按钮与进度条才关闭 `WS_EX_TRANSPARENT`。滚轮使用独立低级鼠标钩子，仅在未被遮挡的歌词区拦截，不抢占键盘焦点；关闭最后一个窗口时卸载钩子。
+
+### 本地验证与验收
+
+原生 x64 程序编译成功；41 项原有测试及 4 项音量接口测试通过。实际 Windows 桌面测试确认父 HWND 等于任务栏 HWND、`WS_CHILD`、`WS_EX_TRANSPARENT`、`WS_EX_NOACTIVATE` 和滚轮钩子状态。
+
+尚需在真实 EchoMusic 中检查：歌词区域滚轮与音量条、封面／按钮点击、进度拖动、空白区域穿透、开始菜单遮挡、多屏不同 DPI、自动隐藏任务栏以及 Explorer 重启。现有定位不自动为歌词腾出任务栏空间，可在设置中调整宽度和左侧距离。
+
+安装本地修改版：先停用旧插件，将压缩包里的 `taskbar-lyrics` 内容替换到现有插件目录，然后重新启用或重启 EchoMusic。不要只替换 EXE，`index.js` 包含配套音量接口。在线插件源尚未发布此修改版。
+## v1.2.1 不显示修复
+
+旧版把透明 WPF 顶层 Window 改为子窗口后，HWND 虽然存在，WPF 的分层绘制仍失败，导致没有可见内容。新版由 WPF 离屏生成预乘透明像素，原生 `STATIC` 子窗口通过 `UpdateLayeredWindow` 提交画面。Windows 11 优先挂接任务栏的合成内容宿主，其他任务栏使用任务栏 HWND。透明度由像素提交控制，不混用 `SetLayeredWindowAttributes`。
+
+鼠标坐标由视觉元素相对根节点的位置、实际窗口屏幕边界和 DPI 计算，封面／按钮点击、进度拖动和鼠标捕获由原生子窗口处理。渲染资源会在尺寸或 DPI 改变时重建，关闭时释放。诊断报告新增 `paintSucceeded` 和 `paintError`，避免只通过 HWND 可见状态误判显示正常。
+
+验证：实际任务栏截图出现歌词；两屏分别 96 / 144 DPI 时绘制成功，逻辑宽度均为 360；通过测试状态服务在歌词区域模拟一格滚轮，音量从 50 改为 55，音量条可见。模拟不会发送鼠标输入或修改真实播放器音量。
+## v1.2.2 按钮点击修复
+
+任务栏上的透明子窗口可能被 Windows 鼠标命中检测跳过，即使控件可见且 `WS_EX_TRANSPARENT` 已关闭。专用原生窗口类负责绘制与消息处理；已有鼠标钩子新增控件左键转发，只处理未被遮挡的封面、可见按钮和进度条。按下后将拖动／释放发给同一窗口，并在释放或关闭时清理捕获。歌词、空白区域和右键继续穿透；窗口不获取键盘焦点。
+
+实际 Windows 输入回归测试覆盖四个按钮，并在 96 / 144 DPI 屏幕上分别确认模拟播放器收到 `previousTrack`、`togglePlayback`、`nextTrack`、`toggleFavorite`。双屏滚轮音量回归仍通过。
+
+原生输入回归测试需交互式 Windows 桌面，测试期间短暂移动鼠标，退出时恢复，请保持鼠标空闲且任务栏未被其他窗口遮挡；播放命令发往独立模拟服务，不改变 EchoMusic 播放状态：
+
+```powershell
+node tests/native-smoke.mjs --buttons
+node tests/native-smoke.mjs --buttons --secondary
+node tests/native-smoke.mjs --input --all
+```
+
+`--secondary` 默认使用 Windows 设备标识 DISPLAY2；无该屏幕时宿主会回退到主屏幕，需检查输出的 DPI 是否符合预期。

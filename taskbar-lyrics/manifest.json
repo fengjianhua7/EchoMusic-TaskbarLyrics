@@ -1,9 +1,9 @@
 {
   "id": "taskbar-lyrics",
-  "name": "任务栏歌词 · 微光",
-  "version": "1.1.5",
-  "description": "Windows 多屏任务栏歌词，支持封面、悬浮快捷操作与进度条、任务栏歌曲信息和自动配色。",
-  "author": "CarsonGame",
+  "name": "任务栏歌词 · 微光（增强版）",
+  "version": "1.2.2",
+  "description": "Windows 多屏任务栏嵌入歌词，支持滚轮音量与音量条、封面、快捷操作与进度条和自动配色。",
+  "author": "CarsonGame；fengjianhua7 维护",
   "icon": "icon.svg",
   "main": "index.js",
   "style": "settings.css",

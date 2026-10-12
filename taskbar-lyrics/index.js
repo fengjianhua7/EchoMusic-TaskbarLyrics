@@ -1057,7 +1057,6 @@ return function render(_ctx, _cache) {
     ]))
 }
 }
-
 export async function activate(ctx) {
   if (ctx.electron.platform !== 'win32') throw new Error('此插件仅支持 Windows。');
   let settings = normalize(await ctx.storage.get('settings') || DEFAULTS);
@@ -1067,6 +1066,7 @@ export async function activate(ctx) {
   let launchPending = false;
   let commandBusy = false;
   let mainWindowPending = false;
+  let volumeBusy = false;
   let coverRevision = 1;
   let coverIdentity = `${snapshot.playback?.trackId || ''}:${snapshot.playback?.coverUrl || ''}`;
   let cachedCover;
@@ -1098,7 +1098,8 @@ export async function activate(ctx) {
   const currentFrame = () => {
     const information=informationAccent(settings);
     if(information)coverInformationAccent.value=information;
-    const frame={...makeFrame(snapshot,settings,Date.now(),coverAccent.value,information),commandBusy};
+    const volume=Number(ctx.player.volume.value);
+    const frame={...makeFrame(snapshot,settings,Date.now(),coverAccent.value,information),commandBusy,volume:Number.isFinite(volume)?Math.max(0,Math.min(100,volume)):null};
     if (frame.coverUrl) {
       frame.coverSourceUrl=frame.coverUrl;
       frame.coverUrl=`${server.origin}/cover?token=${token}&key=${coverRevision}`;
@@ -1199,8 +1200,25 @@ export async function activate(ctx) {
       return {status:502,body:JSON.stringify({error:error.message})};
     }finally{mainWindowPending=false;}
   };
+  const adjustVolume = async request => {
+    if(request.method!=='POST')return {status:405,body:''};
+    if(!settings.enabled)return {status:403,body:''};
+    const delta=Number(request.query.delta);
+    if(request.query.delta===undefined || String(request.query.delta).trim()==='' || !Number.isFinite(delta) || Math.abs(delta)>100)return {status:400,body:''};
+    if(volumeBusy)return {status:409,body:''};
+    const before=Number(ctx.player.volume.value);
+    if(!Number.isFinite(before))return {status:503,body:''};
+    volumeBusy=true;
+    try {
+      await ctx.player.setVolume(Math.max(0,Math.min(100,before+delta)));
+      return {headers:{'content-type':'application/json'},body:JSON.stringify({ok:true,volume:Number(ctx.player.volume.value)})};
+    } catch(error) {
+      return {status:502,body:JSON.stringify({error:error.message})};
+    } finally {volumeBusy=false;}
+  };
   const server = await ctx.webServer.listen(request => {
     if (!alive || request.query.token !== token) return { status: 403, body: '' };
+    if (request.path === '/volume') return adjustVolume(request);
     if (request.path === '/command') return control(request);
     if (request.path === '/show-main') return showMainWindow(request);
     if (request.path === '/cover') return cover(request);
